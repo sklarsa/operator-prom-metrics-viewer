@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -169,16 +168,31 @@ func main() {
 			for k := range data {
 				keys = append(keys, k)
 			}
-			sort.Strings(keys)
 
 			for _, k := range keys {
-				// doesn't keep this alpha, just adds new ones to the bottom
+				item := data[k].String()
 
 				found := list.FindItems("dummy value", k, false, true)
-				item := data[k].String()
+
 				switch len(found) {
 				case 0:
-					list.AddItem(item, k, 0, nil)
+					if list.GetItemCount() == 0 {
+						list.AddItem(item, k, 0, nil)
+						continue
+					}
+					var added bool
+					for i := 0; i < list.GetItemCount(); i++ {
+						_, lk := list.GetItemText(i)
+						if k < lk {
+							list.InsertItem(i, item, k, 0, nil)
+							added = true
+							break
+						}
+					}
+					if !added {
+						list.AddItem(item, k, 0, nil)
+					}
+
 				case 1:
 					list.SetItemText(found[0], item, k)
 				default:
@@ -192,6 +206,6 @@ func main() {
 		}
 	}()
 
-	app.SetRoot(list, true).Run()
+	app.SetRoot(list, true).SetFocus(list).Run()
 
 }
