@@ -163,17 +163,11 @@ func main() {
 	go func() {
 		for range ticker.C {
 
-			keys := []string{}
 			data := storage.appender.(*InMemoryAppender).data
-
-			for k := range data {
-				keys = append(keys, k)
-			}
-
-			for _, k := range keys {
-				item := data[k].String()
+			for k, v := range data {
 
 				found := list.FindItems("dummy value", k, false, true)
+				item := v.String()
 
 				switch len(found) {
 				case 0:
