@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -176,6 +177,10 @@ func main() {
 
 				switch len(found) {
 				case 0:
+					if math.IsNaN(data[k].Value) {
+						continue
+					}
+
 					if list.GetItemCount() == 0 {
 						list.AddItem(item, k, 0, nil)
 						continue
@@ -194,6 +199,11 @@ func main() {
 					}
 
 				case 1:
+					if math.IsNaN(data[k].Value) {
+						list.RemoveItem(found[0])
+						continue
+					}
+
 					list.SetItemText(found[0], item, k)
 				default:
 					// todo: handle this better
