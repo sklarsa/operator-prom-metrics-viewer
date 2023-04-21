@@ -1,10 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,76 +11,18 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
-	"github.com/prometheus/prometheus/model/exemplar"
-	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/scrape"
-	"github.com/prometheus/prometheus/storage"
 	"github.com/rivo/tview"
 )
 
-type InMemoryMetricStorage struct {
-	appender storage.Appender
-}
-
-type RegularValue struct {
-	Labels    labels.Labels
-	Timestamp int64
-	Value     float64
-}
-
-func (v RegularValue) String() string {
-	var (
-		metricName string
-		labelPairs []string
-	)
-	for _, l := range v.Labels {
-		switch l.Name {
-		case labels.MetricName:
-			metricName = l.Value
-		case labels.InstanceName, "job":
-			continue
-		default:
-			labelPairs = append(labelPairs, fmt.Sprintf("%s=%s", l.Name, l.Value))
-		}
-	}
-
-	return fmt.Sprintf("%s{%s} %f", metricName, strings.Join(labelPairs, ","), v.Value)
-}
-
-type InMemoryAppender struct {
-	data map[string]RegularValue
-	mu   *sync.Mutex
-}
-
-func (s InMemoryMetricStorage) Appender(ctx context.Context) storage.Appender {
-	return s.appender
-}
-
-func (a *InMemoryAppender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.data[l.String()] = RegularValue{Labels: l, Timestamp: t, Value: v}
-	return ref, nil
-}
-func (a *InMemoryAppender) Commit() error {
-	return nil
-}
-func (a *InMemoryAppender) Rollback() error {
-	return nil
-}
-func (a *InMemoryAppender) AppendExemplar(ref storage.SeriesRef, l labels.Labels, e exemplar.Exemplar) (storage.SeriesRef, error) {
-	println("exemplar", l.String(), e.Ts, e.Value, e.Labels.String())
-	return ref, nil
-}
-func (a *InMemoryAppender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t int64, h *histogram.Histogram, fh *histogram.FloatHistogram) (storage.SeriesRef, error) {
-	println("histogram", l.String(), t, h, fh)
-	return ref, nil
-}
-func (a *InMemoryAppender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, m metadata.Metadata) (storage.SeriesRef, error) {
-	println("metadata", l.String(), m.Help, m.Type, m.Unit)
-	return ref, nil
+var tableMetricsToShow = []string{
+	"controller_runtime_active_workers",
+	"controller_runtime_max_concurrent_reconciles",
+	"controller_runtime_reconcile_errors_total",
+	"controller_runtime_reconcile_time_seconds_count",
+	"workqueue_depth",
+	"workqueue_longest_running_processor_seconds",
 }
 
 func main() {
@@ -109,7 +50,7 @@ func main() {
 
 	storage := InMemoryMetricStorage{
 		appender: &InMemoryAppender{
-			data: make(map[string]RegularValue),
+			data: make(map[uint64]DataPoint),
 			mu:   &sync.Mutex{},
 		},
 	}
@@ -157,52 +98,38 @@ func main() {
 	fmt.Printf("%s %s %s", tgt.LastScrape(), tgt.LastScrapeDuration(), tgt.Health())
 
 	app := tview.NewApplication()
-	list := tview.NewList()
-	list.ShowSecondaryText(false)
+	table := tview.NewTable().SetBorders(true)
 
 	go func() {
 		for range ticker.C {
 
-			data := storage.appender.(*InMemoryAppender).data
-			for k, v := range data {
+			appender := storage.appender.(*InMemoryAppender)
+			controllers := appender.Controllers()
+			cols := len(tableMetricsToShow)
 
-				found := list.FindItems("dummy value", k, false, true)
-				item := v.String()
+			// Set headers
+			table.SetCell(0, 0, tview.NewTableCell(""))
+			for c := 0; c < cols; c++ {
+				table.SetCell(0, c+1, tview.NewTableCell(tableMetricsToShow[c]))
+			}
 
-				switch len(found) {
-				case 0:
-					if math.IsNaN(data[k].Value) {
-						continue
+			for r := 0; r < len(controllers); r++ {
+				table.SetCell(r+1, 0, tview.NewTableCell(controllers[r]))
+				for c := 0; c < cols; c++ {
+					var val string
+
+					var queryLabels []labels.Label
+					if strings.HasPrefix(tableMetricsToShow[c], "workqueue") {
+						queryLabels = append(queryLabels, labels.Label{Name: "name", Value: controllers[r]})
+					} else {
+						queryLabels = append(queryLabels, labels.Label{Name: "controller", Value: controllers[r]})
 					}
 
-					if list.GetItemCount() == 0 {
-						list.AddItem(item, k, 0, nil)
-						continue
+					results := appender.Query(tableMetricsToShow[c], queryLabels)
+					if len(results) == 1 {
+						val = strconv.FormatFloat(results[0].Value, 'f', 0, 64)
 					}
-					var added bool
-					for i := 0; i < list.GetItemCount(); i++ {
-						_, lk := list.GetItemText(i)
-						if k < lk {
-							list.InsertItem(i, item, k, 0, nil)
-							added = true
-							break
-						}
-					}
-					if !added {
-						list.AddItem(item, k, 0, nil)
-					}
-
-				case 1:
-					if math.IsNaN(data[k].Value) {
-						list.RemoveItem(found[0])
-						continue
-					}
-
-					list.SetItemText(found[0], item, k)
-				default:
-					// todo: handle this better
-					panic("found multiple items")
-
+					table.SetCell(r+1, c+1, tview.NewTableCell(val))
 				}
 			}
 
@@ -210,6 +137,6 @@ func main() {
 		}
 	}()
 
-	app.SetRoot(list, true).SetFocus(list).Run()
+	app.SetRoot(table, true).SetFocus(table).Run()
 
 }
