@@ -1,87 +1,30 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+	"github.com/navidys/tvxwidgets"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
-	"github.com/prometheus/prometheus/model/exemplar"
-	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/scrape"
-	"github.com/prometheus/prometheus/storage"
 	"github.com/rivo/tview"
 )
 
-type InMemoryMetricStorage struct {
-	appender storage.Appender
-}
-
-type RegularValue struct {
-	Labels    labels.Labels
-	Timestamp int64
-	Value     float64
-}
-
-func (v RegularValue) String() string {
-	var (
-		metricName string
-		labelPairs []string
-	)
-	for _, l := range v.Labels {
-		switch l.Name {
-		case labels.MetricName:
-			metricName = l.Value
-		case labels.InstanceName, "job":
-			continue
-		default:
-			labelPairs = append(labelPairs, fmt.Sprintf("%s=%s", l.Name, l.Value))
-		}
-	}
-
-	return fmt.Sprintf("%s{%s} %f", metricName, strings.Join(labelPairs, ","), v.Value)
-}
-
-type InMemoryAppender struct {
-	data map[string]RegularValue
-	mu   *sync.Mutex
-}
-
-func (s InMemoryMetricStorage) Appender(ctx context.Context) storage.Appender {
-	return s.appender
-}
-
-func (a *InMemoryAppender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.data[l.String()] = RegularValue{Labels: l, Timestamp: t, Value: v}
-	return ref, nil
-}
-func (a *InMemoryAppender) Commit() error {
-	return nil
-}
-func (a *InMemoryAppender) Rollback() error {
-	return nil
-}
-func (a *InMemoryAppender) AppendExemplar(ref storage.SeriesRef, l labels.Labels, e exemplar.Exemplar) (storage.SeriesRef, error) {
-	println("exemplar", l.String(), e.Ts, e.Value, e.Labels.String())
-	return ref, nil
-}
-func (a *InMemoryAppender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t int64, h *histogram.Histogram, fh *histogram.FloatHistogram) (storage.SeriesRef, error) {
-	println("histogram", l.String(), t, h, fh)
-	return ref, nil
-}
-func (a *InMemoryAppender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, m metadata.Metadata) (storage.SeriesRef, error) {
-	println("metadata", l.String(), m.Help, m.Type, m.Unit)
-	return ref, nil
+var tableMetricsToShow = []string{
+	"controller_runtime_active_workers",
+	"controller_runtime_max_concurrent_reconciles",
+	"controller_runtime_reconcile_errors_total",
+	"controller_runtime_reconcile_time_seconds_count",
+	"workqueue_depth",
+	"workqueue_longest_running_processor_seconds",
 }
 
 func main() {
@@ -109,7 +52,7 @@ func main() {
 
 	storage := InMemoryMetricStorage{
 		appender: &InMemoryAppender{
-			data: make(map[string]RegularValue),
+			data: make(map[uint64]DataPoint),
 			mu:   &sync.Mutex{},
 		},
 	}
@@ -157,59 +100,105 @@ func main() {
 	fmt.Printf("%s %s %s", tgt.LastScrape(), tgt.LastScrapeDuration(), tgt.Health())
 
 	app := tview.NewApplication()
-	list := tview.NewList()
-	list.ShowSecondaryText(false)
+
+	table := tview.NewTable()
+	table.SetBorders(true).
+		SetBorder(true).
+		SetTitle("Overview")
+
+	dropdown := tview.NewDropDown().SetFieldWidth(20).SetLabel("Controller:")
+
+	reconcileTimeHist := tvxwidgets.NewBarChart()
+	var reconcileTimeData *HistogramData
+
+	histFlex := tview.NewFlex().SetDirection(tview.FlexColumn).AddItem(reconcileTimeHist, 0, 1, false)
+	histFlex.SetBorder(true).
+		SetTitle("Detail")
+
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(table, 0, 1, false).
+		AddItem(dropdown, 1, 0, false).
+		AddItem(histFlex, 0, 2, false)
 
 	go func() {
 		for range ticker.C {
 
-			data := storage.appender.(*InMemoryAppender).data
-			for k, v := range data {
+			appender := storage.appender.(*InMemoryAppender)
+			controllers := appender.Controllers()
 
-				found := list.FindItems("dummy value", k, false, true)
-				item := v.String()
-
-				switch len(found) {
-				case 0:
-					if math.IsNaN(data[k].Value) {
-						continue
-					}
-
-					if list.GetItemCount() == 0 {
-						list.AddItem(item, k, 0, nil)
-						continue
-					}
-					var added bool
-					for i := 0; i < list.GetItemCount(); i++ {
-						_, lk := list.GetItemText(i)
-						if k < lk {
-							list.InsertItem(i, item, k, 0, nil)
-							added = true
-							break
-						}
-					}
-					if !added {
-						list.AddItem(item, k, 0, nil)
-					}
-
-				case 1:
-					if math.IsNaN(data[k].Value) {
-						list.RemoveItem(found[0])
-						continue
-					}
-
-					list.SetItemText(found[0], item, k)
-				default:
-					// todo: handle this better
-					panic("found multiple items")
-
+			// Controller dropdown
+			if len(controllers) != dropdown.GetOptionCount() {
+				dropdown.SetOptions(controllers, nil)
+				if len(controllers) > 0 {
+					dropdown.SetCurrentOption(0)
 				}
 			}
+
+			// Overview metric table
+			table.SetCell(0, 0, tview.NewTableCell(""))
+			for c, name := range controllers {
+				table.SetCell(0, c+1, tview.NewTableCell(name))
+			}
+
+			for r, metric := range tableMetricsToShow {
+				table.SetCell(r+1, 0, tview.NewTableCell(metric))
+				for c, controller := range controllers {
+					var val string
+
+					var queryLabels []labels.Label
+					if strings.HasPrefix(metric, "workqueue") {
+						queryLabels = append(queryLabels, labels.Label{Name: "name", Value: controller})
+					} else {
+						queryLabels = append(queryLabels, labels.Label{Name: "controller", Value: controller})
+					}
+
+					results := appender.Query(metric, queryLabels)
+					if len(results) == 1 {
+						val = strconv.FormatFloat(results[0].Value, 'f', 0, 64)
+					}
+					table.SetCell(r+1, c+1, tview.NewTableCell(val))
+				}
+			}
+
+			// Reconcile time histogram
+			_, selectedController := dropdown.GetCurrentOption()
+			histData, err := NewHistogramData(appender, "controller_runtime_reconcile_time_seconds_bucket", selectedController)
+			if err != nil {
+				panic(err)
+			}
+
+			var isNew bool
+			if reconcileTimeData == nil || histData.BucketCount() != reconcileTimeData.BucketCount() {
+				isNew = true
+
+				histFlex.RemoveItem(reconcileTimeHist)
+				reconcileTimeHist = tvxwidgets.NewBarChart()
+				reconcileTimeHist.SetBorder(true)
+				reconcileTimeHist.SetTitle("Reconcile Time")
+				histFlex.AddItem(reconcileTimeHist, 0, 1, false)
+
+			}
+
+			for histData.HasNext() {
+				b, err := histData.Next()
+				if err != nil {
+					panic(err)
+				}
+				if isNew {
+					reconcileTimeHist.AddBar(b.Label, int(b.Value), tcell.ColorBlue)
+				} else {
+					reconcileTimeHist.SetBarValue(b.Label, int(b.Value))
+				}
+
+			}
+			reconcileTimeHist.SetMaxValue(histData.Max())
 
 			app.Draw()
 		}
 	}()
 
-	app.SetRoot(list, true).SetFocus(list).Run()
+	if err := app.SetRoot(flex, true).SetFocus(dropdown).Run(); err != nil {
+		panic(err)
+	}
 
 }

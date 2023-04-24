@@ -3,6 +3,8 @@ module github.com/sklarsa/prom-metrics-viewer
 go 1.20
 
 require (
+	github.com/gdamore/tcell/v2 v2.6.0
+	github.com/navidys/tvxwidgets v0.3.0
 	github.com/prometheus/common v0.42.0
 	github.com/prometheus/prometheus v0.43.0
 	github.com/rivo/tview v0.0.0-20230406072732-e22ce9588bb4
@@ -16,7 +18,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dennwc/varint v1.0.0 // indirect
 	github.com/gdamore/encoding v1.0.0 // indirect
-	github.com/gdamore/tcell/v2 v2.6.0 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
