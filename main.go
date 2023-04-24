@@ -180,10 +180,7 @@ func main() {
 			}
 
 			for histData.HasNext() {
-				b, err := histData.Next()
-				if err != nil {
-					panic(err)
-				}
+				b := histData.Next()
 				if isNew {
 					reconcileTimeHist.AddBar(b.Label, int(b.Value), tcell.ColorBlue)
 				} else {

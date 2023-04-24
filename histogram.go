@@ -90,16 +90,17 @@ func (d *HistogramData) HasNext() bool {
 	return d.curIdx < (len(d.buckets) - 1)
 }
 
-func (d *HistogramData) Next() (Bucket, error) {
+func (d *HistogramData) Next() Bucket {
 
-	if !d.HasNext() {
-		return Bucket{}, errors.New("no more histogram data.  call HistogramData.HasNext() to check before calling HistogramData.Next()")
+	var bucket Bucket
+	for bucket.Value == 0 {
+		if !d.HasNext() {
+			return Bucket{}
+		}
+		bucket = d.buckets[d.curIdx]
+		d.curIdx++
 	}
-
-	bucket := d.buckets[d.curIdx]
-	d.curIdx++
-
-	return bucket, nil
+	return bucket
 }
 
 func (d *HistogramData) BucketCount() int {
