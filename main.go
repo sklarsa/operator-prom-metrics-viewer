@@ -98,7 +98,18 @@ func main() {
 	fmt.Printf("%s %s %s", tgt.LastScrape(), tgt.LastScrapeDuration(), tgt.Health())
 
 	app := tview.NewApplication()
-	table := tview.NewTable().SetBorders(true)
+
+	table := tview.NewTable()
+	table.SetBorders(true).
+		SetBorder(true).
+		SetTitle("Overview")
+
+	dropdown := tview.NewDropDown().SetFieldWidth(20).SetLabel("Controller:")
+
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(table, 0, 1, false).
+		AddItem(dropdown, 1, 0, false).
+		AddItem(tview.NewBox().SetBorder(true).SetTitle("Detail"), 0, 2, false)
 
 	go func() {
 		for range ticker.C {
@@ -106,7 +117,15 @@ func main() {
 			appender := storage.appender.(*InMemoryAppender)
 			controllers := appender.Controllers()
 
-			// Set headers
+			// Controller dropdown
+			if len(controllers) != dropdown.GetOptionCount() {
+				dropdown.SetOptions(controllers, nil)
+				if len(controllers) > 0 {
+					dropdown.SetCurrentOption(0)
+				}
+			}
+
+			// Overview metric table
 			table.SetCell(0, 0, tview.NewTableCell(""))
 			for c, name := range controllers {
 				table.SetCell(0, c+1, tview.NewTableCell(name))
@@ -137,6 +156,8 @@ func main() {
 		}
 	}()
 
-	app.SetRoot(table, true).SetFocus(table).Run()
+	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
+		panic(err)
+	}
 
 }
