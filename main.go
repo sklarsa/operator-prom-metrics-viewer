@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+	"github.com/navidys/tvxwidgets"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
@@ -106,10 +108,17 @@ func main() {
 
 	dropdown := tview.NewDropDown().SetFieldWidth(20).SetLabel("Controller:")
 
+	reconcileTimeHist := tvxwidgets.NewBarChart()
+	var reconcileTimeData *HistogramData
+
+	histFlex := tview.NewFlex().SetDirection(tview.FlexColumn).AddItem(reconcileTimeHist, 0, 1, false)
+	histFlex.SetBorder(true).
+		SetTitle("Detail")
+
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(table, 0, 1, false).
 		AddItem(dropdown, 1, 0, false).
-		AddItem(tview.NewBox().SetBorder(true).SetTitle("Detail"), 0, 2, false)
+		AddItem(histFlex, 0, 2, false)
 
 	go func() {
 		for range ticker.C {
@@ -149,14 +158,46 @@ func main() {
 					}
 					table.SetCell(r+1, c+1, tview.NewTableCell(val))
 				}
+			}
+
+			// Reconcile time histogram
+			_, selectedController := dropdown.GetCurrentOption()
+			histData, err := NewHistogramData(appender, "controller_runtime_reconcile_time_seconds_bucket", selectedController)
+			if err != nil {
+				panic(err)
+			}
+
+			var isNew bool
+			if reconcileTimeData == nil || histData.BucketCount() != reconcileTimeData.BucketCount() {
+				isNew = true
+
+				histFlex.RemoveItem(reconcileTimeHist)
+				reconcileTimeHist = tvxwidgets.NewBarChart()
+				reconcileTimeHist.SetBorder(true)
+				reconcileTimeHist.SetTitle("Reconcile Time")
+				histFlex.AddItem(reconcileTimeHist, 0, 1, false)
 
 			}
+
+			for histData.HasNext() {
+				b, err := histData.Next()
+				if err != nil {
+					panic(err)
+				}
+				if isNew {
+					reconcileTimeHist.AddBar(b.Label, int(b.Value), tcell.ColorBlue)
+				} else {
+					reconcileTimeHist.SetBarValue(b.Label, int(b.Value))
+				}
+
+			}
+			reconcileTimeHist.SetMaxValue(histData.Max())
 
 			app.Draw()
 		}
 	}()
 
-	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
+	if err := app.SetRoot(flex, true).SetFocus(dropdown).Run(); err != nil {
 		panic(err)
 	}
 
