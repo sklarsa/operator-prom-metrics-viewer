@@ -105,32 +105,32 @@ func main() {
 
 			appender := storage.appender.(*InMemoryAppender)
 			controllers := appender.Controllers()
-			cols := len(tableMetricsToShow)
 
 			// Set headers
 			table.SetCell(0, 0, tview.NewTableCell(""))
-			for c := 0; c < cols; c++ {
-				table.SetCell(0, c+1, tview.NewTableCell(tableMetricsToShow[c]))
+			for c, name := range controllers {
+				table.SetCell(0, c+1, tview.NewTableCell(name))
 			}
 
-			for r := 0; r < len(controllers); r++ {
-				table.SetCell(r+1, 0, tview.NewTableCell(controllers[r]))
-				for c := 0; c < cols; c++ {
+			for r, metric := range tableMetricsToShow {
+				table.SetCell(r+1, 0, tview.NewTableCell(metric))
+				for c, controller := range controllers {
 					var val string
 
 					var queryLabels []labels.Label
-					if strings.HasPrefix(tableMetricsToShow[c], "workqueue") {
-						queryLabels = append(queryLabels, labels.Label{Name: "name", Value: controllers[r]})
+					if strings.HasPrefix(metric, "workqueue") {
+						queryLabels = append(queryLabels, labels.Label{Name: "name", Value: controller})
 					} else {
-						queryLabels = append(queryLabels, labels.Label{Name: "controller", Value: controllers[r]})
+						queryLabels = append(queryLabels, labels.Label{Name: "controller", Value: controller})
 					}
 
-					results := appender.Query(tableMetricsToShow[c], queryLabels)
+					results := appender.Query(metric, queryLabels)
 					if len(results) == 1 {
 						val = strconv.FormatFloat(results[0].Value, 'f', 0, 64)
 					}
 					table.SetCell(r+1, c+1, tview.NewTableCell(val))
 				}
+
 			}
 
 			app.Draw()
