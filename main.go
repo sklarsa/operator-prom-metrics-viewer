@@ -29,11 +29,11 @@ var tableMetricsToShow = []string{
 
 func main() {
 	if len(os.Args) != 2 {
-		panic("Usage: metrics-viewer <metrics-host>")
+		panic("Usage: metrics-viewer <metrics-host>") // todo: default to 8082 if no port is provided
 	}
 
 	host := os.Args[1]
-	scheme := "http"
+	scheme := "http"                        // todo: make this configurable
 	scrapeTimeout := time.Millisecond * 500 // todo: make this configurable
 	scrapeInterval := time.Second * 1       // todo: make this configurable
 	refreshInterval := time.Second * 1      // todo: make this configurable
