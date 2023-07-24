@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,13 +19,16 @@ import (
 	"github.com/rivo/tview"
 )
 
-var tableMetricsToShow = []string{
+var controllerTableMetrics = []string{
 	"controller_runtime_active_workers",
 	"controller_runtime_max_concurrent_reconciles",
 	"controller_runtime_reconcile_errors_total",
 	"controller_runtime_reconcile_time_seconds_count",
 	"workqueue_depth",
 	"workqueue_longest_running_processor_seconds",
+	"workqueue_unfinished_work_seconds",
+	"workqueue_retries_total",
+	"workqueue_adds_total",
 }
 
 func main() {
@@ -101,10 +105,19 @@ func main() {
 
 	app := tview.NewApplication()
 
-	table := tview.NewTable()
-	table.SetBorders(true).
+	controllerInfoTable := tview.NewTable()
+	controllerInfoTable.SetBorders(true).
 		SetBorder(true).
-		SetTitle("Overview")
+		SetTitle("Controllers")
+
+	restApiTable := tview.NewTable()
+	restApiTable.SetBorders(true).
+		SetBorder(true).
+		SetTitle("Rest API")
+
+	overviewFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(controllerInfoTable, 0, 3, false).
+		AddItem(restApiTable, 0, 2, false)
 
 	dropdown := tview.NewDropDown().SetFieldWidth(20).SetLabel("Controller:")
 
@@ -115,33 +128,48 @@ func main() {
 	histFlex.SetBorder(true).
 		SetTitle("Detail")
 
+	pages := tview.NewPages()
+	const (
+		overviewPage   = "overview"
+		controllerPage = "controller"
+	)
+	pages.AddPage(overviewPage, overviewFlex, true, true)
+	pages.AddPage(controllerPage, histFlex, true, false)
+
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(table, 0, 1, false).
 		AddItem(dropdown, 1, 0, false).
-		AddItem(histFlex, 0, 2, false)
+		AddItem(pages, 0, 1, false)
 
 	go func() {
 		for range ticker.C {
 
 			appender := storage.appender.(*InMemoryAppender)
 			controllers := appender.Controllers()
+			options := append([]string{" ** Overview **"}, controllers...)
 
-			// Controller dropdown
-			if len(controllers) != dropdown.GetOptionCount() {
-				dropdown.SetOptions(controllers, nil)
-				if len(controllers) > 0 {
+			// Setup controller dropdown
+			if len(options) != dropdown.GetOptionCount() {
+				dropdown.SetOptions(options, nil)
+				if len(options) > 0 {
 					dropdown.SetCurrentOption(0)
 				}
 			}
 
-			// Overview metric table
-			table.SetCell(0, 0, tview.NewTableCell(""))
-			for c, name := range controllers {
-				table.SetCell(0, c+1, tview.NewTableCell(name))
+			// Pick page based on dropdown
+			if idx, _ := dropdown.GetCurrentOption(); idx == 0 {
+				pages.SwitchToPage(overviewPage)
+			} else {
+				pages.SwitchToPage(controllerPage)
 			}
 
-			for r, metric := range tableMetricsToShow {
-				table.SetCell(r+1, 0, tview.NewTableCell(metric))
+			// Controller info table
+			controllerInfoTable.SetCell(0, 0, tview.NewTableCell(""))
+			for c, name := range controllers {
+				controllerInfoTable.SetCell(0, c+1, tview.NewTableCell(name))
+			}
+
+			for r, metric := range controllerTableMetrics {
+				controllerInfoTable.SetCell(r+1, 0, tview.NewTableCell(metric))
 				for c, controller := range controllers {
 					var val string
 
@@ -156,8 +184,25 @@ func main() {
 					if len(results) == 1 {
 						val = strconv.FormatFloat(results[0].Value, 'f', 0, 64)
 					}
-					table.SetCell(r+1, c+1, tview.NewTableCell(val))
+					controllerInfoTable.SetCell(r+1, c+1, tview.NewTableCell(val))
 				}
+			}
+
+			// Rest api table
+			restApiTable.SetCell(0, 0, tview.NewTableCell("Method"))
+			restApiTable.SetCell(0, 1, tview.NewTableCell("Response"))
+			restApiTable.SetCell(0, 2, tview.NewTableCell("Call Count"))
+			metrics := appender.Query("rest_client_requests_total", nil)
+			sort.Slice(metrics, func(x, y int) bool {
+				xSort := metrics[x].Labels.Get("code") + metrics[x].Labels.Get("method")
+				ySort := metrics[y].Labels.Get("code") + metrics[y].Labels.Get("method")
+
+				return xSort < ySort
+			})
+			for idx, metric := range metrics {
+				restApiTable.SetCell(idx+1, 0, tview.NewTableCell(metric.Labels.Get("method")))
+				restApiTable.SetCell(idx+1, 1, tview.NewTableCell(metric.Labels.Get("code")))
+				restApiTable.SetCell(idx+1, 2, tview.NewTableCell(strconv.FormatFloat(metric.Value, 'f', 0, 64)))
 			}
 
 			// Reconcile time histogram
@@ -194,7 +239,9 @@ func main() {
 		}
 	}()
 
-	if err := app.SetRoot(flex, true).SetFocus(dropdown).Run(); err != nil {
+	if err := app.SetRoot(flex, true).
+		SetFocus(dropdown).
+		Run(); err != nil {
 		panic(err)
 	}
 
